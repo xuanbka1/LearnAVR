@@ -1,0 +1,206 @@
+//IOserver//
+// pin 15 and pin 16 is output control switch //
+// pin 15 is header8
+//pin 16 is header10
+// control ZX80DR230//
+
+#include <iostream>
+#include <vector>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/types.h> 
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <string.h>
+#include <arpa/inet.h>
+#include <pthread.h>
+
+extern "C" {
+
+#include <wiringPi.h>
+  }
+
+
+using namespace std;
+
+#define MAXPACKETSIZE 4096
+#define CONTROL1 15
+#define CONTROL2 16
+
+class TCPServer
+{
+	public:
+	int sockfd, newsockfd, n, pid;
+	struct sockaddr_in serverAddress;
+	struct sockaddr_in clientAddress;
+	pthread_t serverThread;
+	char msg[ MAXPACKETSIZE ];
+	static string Message;
+
+	void setup(int port);
+	string receive();
+	string getMessage();
+	void Send(string msg);
+	void detach();
+	void clean();
+
+	private:
+	static void * Task(void * argv);
+};
+
+
+string TCPServer::Message;
+
+void* TCPServer::Task(void *arg)
+{
+	int n;
+	int newsockfd = (long)arg;
+	char msg[MAXPACKETSIZE];
+	pthread_detach(pthread_self());
+	while(1)
+	{
+		n=recv(newsockfd,msg,MAXPACKETSIZE,0);
+		if(n==0)
+		{
+		   close(newsockfd);
+		   break;
+		}
+		msg[n]=0;
+		//send(newsockfd,msg,n,0);
+		Message = string(msg);
+        }
+	return 0;
+}
+
+void TCPServer::setup(int port)
+{
+	sockfd=socket(AF_INET,SOCK_STREAM,0);
+ 	memset(&serverAddress,0,sizeof(serverAddress));
+	serverAddress.sin_family=AF_INET;
+	serverAddress.sin_addr.s_addr=htonl(INADDR_ANY);
+	serverAddress.sin_port=htons(port);
+	bind(sockfd,(struct sockaddr *)&serverAddress, sizeof(serverAddress));
+ 	listen(sockfd,5);
+}
+
+string TCPServer::receive()
+{
+	string str;
+	while(1)
+	{
+		socklen_t sosize  = sizeof(clientAddress);
+		newsockfd = accept(sockfd,(struct sockaddr*)&clientAddress,&sosize);
+		str = inet_ntoa(clientAddress.sin_addr);
+		pthread_create(&serverThread,NULL,&Task,(void *)newsockfd);
+	}
+	return str;
+}
+
+string TCPServer::getMessage()
+{
+	return Message;
+}
+
+void TCPServer::Send(string msg)
+{
+	send(newsockfd,msg.c_str(),msg.length(),0);
+}
+
+void TCPServer::clean()
+{
+	Message = "";
+	memset(msg, 0, MAXPACKETSIZE);
+}
+
+void TCPServer::detach()
+{
+	close(sockfd);
+	close(newsockfd);
+} 
+
+
+
+TCPServer tcp;
+
+std::string state1 ("STATE1");  // RF1 OFF, RF OFF
+std::string state2 ("STATE2");  // RF1 OFF, RF2 ON
+std::string state3 ("STATE3");  // RF1 ON , RF2 OFF
+
+
+void * loop(void * m)
+{
+        pthread_detach(pthread_self());
+	while(1)
+	{
+		srand(time(NULL));
+		char ch = 'a' + rand() % 26;
+		string s(1,ch);
+		string str = tcp.getMessage();
+		if( str != "" )
+		{
+			//cout << "Message:" << str << endl;
+
+			if(state1.compare(str) == 0)
+			{
+			     std::cout<<"RF1-OFF  RF2-OFF" <<'\n';
+			     digitalWrite(CONTROL1, LOW); 
+			     digitalWrite(CONTROL2, LOW);	 
+			     tcp.Send("RF1-OFF  RF2-OFF");
+			}
+
+			else if(state2.compare(str) == 0)
+			{
+			     std::cout<<"RF1-OFF  RF2-ON" <<'\n';
+			     digitalWrite (CONTROL1, LOW);
+			     digitalWrite (CONTROL2, HIGH);
+		             tcp.Send("RF1-OFF  RF2-ON");
+			}
+
+			else if(state3.compare(str) == 0)
+			{
+			     std::cout<<"RF1-ON  RF2-OFF" <<'\n';
+			     digitalWrite (CONTROL1, HIGH);
+			     digitalWrite (CONTROL2, LOW);
+		             tcp.Send("RF1-ON  RF2-OFF");
+			}
+
+			 else
+			{
+			     std::cout<<"NOT AVAILABLE!"<<'\n';
+		             tcp.Send("NOT AVAILABLE!");
+	
+			}
+
+			tcp.clean();
+		}
+		usleep(1000);
+	}
+	tcp.detach();
+}
+
+int main()
+{
+
+
+if(wiringPiSetup()==-1)
+{return 1;}
+
+	//wiringPi.setup();
+	pinMode (CONTROL1, OUTPUT);
+	pinMode (CONTROL2, OUTPUT);
+
+
+	digitalWrite (CONTROL1, HIGH);
+        digitalWrite (CONTROL2, LOW);
+	
+
+	pthread_t msg;
+	tcp.setup(8888);
+	if( pthread_create(&msg, NULL, loop, (void *)0) == 0)
+	{
+		tcp.receive();
+	}
+	return 0;
+}
